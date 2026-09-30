@@ -5,7 +5,8 @@
 #
 # Exécution dans une session R ouverte à la racine du projet :
 # source("R/import.R", encoding = "UTF-8")
-# Aucun package supplémentaire nécessaire.
+# Importation et tableaux : R de base. Graphique : package ggplot2.
+# À installer une seule fois si nécessaire : install.packages("ggplot2")
 # Ce script ne supprime ni ligne ni variable et n'impute aucune valeur.
 
 # 1. Sélection explicite : une seule version par source -------------------
@@ -18,17 +19,31 @@ fichiers <- c(
   va          = "processed.va.data"  # VA Medical Center, Long Beach
 )
 
-# Ordre des 14 colonnes fourni par UCI : 13 variables et la cible num.
-colonnes <- c(
-  "age", "sex", "cp", "trestbps", "chol", "fbs", "restecg",
-  "thalach", "exang", "oldpeak", "slope", "ca", "thal", "num"
+# Correspondance des noms UCI vers des noms français abrégés.
+# Les noms informatiques n'ont pas d'accents ; les libellés du graphique en ont.
+dictionnaire <- data.frame(
+  nom_uci = c("age", "sex", "cp", "trestbps", "chol", "fbs", "restecg",
+              "thalach", "exang", "oldpeak", "slope", "ca", "thal", "num"),
+  nom_fr = c("age", "sexe", "type_doul_thor", "pa_repos", "cholesterol",
+             "glyc_jeun_elevee", "ecg_repos", "fc_max", "angine_effort",
+             "depress_st", "pente_st", "nb_vaisseaux", "test_thallium", "diagnostic"),
+  libelle = c("Âge (ans)", "Sexe", "Type de douleur thoracique",
+              "Pression artérielle au repos (mmHg)", "Cholestérol (mg/dL)",
+              "Glycémie à jeun > 120 mg/dL", "ECG au repos",
+              "Fréquence cardiaque maximale", "Angine à l'effort",
+              "Dépression du segment ST", "Pente du segment ST",
+              "Nombre de vaisseaux visualisés", "Résultat du test au thallium",
+              "Diagnostic (code 0–4)"),
+  stringsAsFactors = FALSE
 )
+colonnes <- dictionnaire$nom_fr
 
-# Les codes numériques sont conservés pour ce premier diagnostic.
-# Attention : sex, cp, fbs, restecg, exang, slope et thal sont des catégories,
-# même si leur stockage est numérique. Ne pas les traiter automatiquement
-# comme des mesures continues dans les analyses ultérieures.
-# num est la cible d'origine (0 à 4) : aucun regroupement binaire ici.
+# Les valeurs et catégories UCI restent inchangées : seul le nom est traduit.
+# sexe, type_doul_thor, glyc_jeun_elevee, ecg_repos, angine_effort,
+# pente_st et test_thallium sont des catégories codées numériquement.
+# diagnostic conserve les codes 0 à 4, sans regroupement binaire.
+# nb_vaisseaux : nombre de vaisseaux majeurs visualisés par fluoroscopie.
+# thal ne désigne pas ici une variable de thalassémie.
 
 # 2. Importation de chaque fichier ---------------------------------------
 importer_source <- function(provenance, dossier = "dataset") {
@@ -78,6 +93,64 @@ print(head(heart), row.names = FALSE)
 cat("\nNombre de lignes par provenance :\n")
 print(table(heart$provenance))
 # head() montre Cleveland en premier car ses lignes sont empilées en premier.
+
+# 3 bis. Recherche de doublons AVANT tout traitement des NA ---------------
+# Une ligne identique n'est pas nécessairement le même patient : aucun
+# identifiant patient fiable n'est fourni dans ces fichiers processed.
+# On compare les 14 colonnes, cible comprise. Les NA aux mêmes positions
+# sont considérés identiques par duplicated() : les données incomplètes
+# peuvent donc produire des profils identiques sans prouver un doublon patient.
+
+# A. Au sein de chaque provenance (répétitions après la première occurrence).
+doublons_par_source <- do.call(rbind, lapply(names(fichiers), function(src) {
+  d <- donnees_par_source[[src]][colonnes]
+  membres <- duplicated(d) | duplicated(d, fromLast = TRUE)
+  data.frame(
+    provenance = src,
+    n_lignes = nrow(d),
+    n_repetitions = sum(duplicated(d)),
+    n_lignes_concernees = sum(membres)
+  )
+}))
+rownames(doublons_par_source) <- NULL
+
+# B. Après fusion, exclure provenance de la comparaison : sinon deux lignes
+# identiques provenant de centres différents ne seraient pas détectées.
+profils <- heart[colonnes]
+est_doublon <- duplicated(profils) | duplicated(profils, fromLast = TRUE)
+
+# Clé des 14 valeurs numériques séparées par | ; NA reste un marqueur explicite.
+# Sert uniquement à regrouper les lignes identiques pour les examiner.
+cles <- do.call(paste, c(profils, sep = "|"))
+groupes <- match(cles, unique(cles))
+nb_sources <- vapply(split(heart$provenance, groupes),
+                    function(x) length(unique(x)), integer(1))
+est_inter_source <- unname(nb_sources[as.character(groupes)]) > 1
+
+# Numéro de ligne dans chaque fichier source pour retrouver les observations.
+lignes_source <- unlist(lapply(donnees_par_source, function(d) seq_len(nrow(d))),
+                        use.names = FALSE)
+details <- data.frame(
+  ligne_fusion = seq_len(nrow(heart)),
+  ligne_source = lignes_source,
+  groupe_profil = groupes,
+  inter_source = est_inter_source,
+  heart
+)
+doublons_details <- details[est_doublon, ]
+doublons_details <- doublons_details[
+  order(doublons_details$groupe_profil, doublons_details$provenance), ]
+doublons_inter_sources <- doublons_details[doublons_details$inter_source, ]
+
+cat("\nProfils identiques au sein de chaque source :\n")
+print(doublons_par_source, row.names = FALSE)
+cat("\nRépétitions globales après la première occurrence : ",
+    sum(duplicated(profils)), "\n", sep = "")
+cat("Nombre de profils présents dans plusieurs sources : ",
+    sum(nb_sources > 1), "\n", sep = "")
+cat("\nToutes les lignes impliquées, première occurrence comprise :\n")
+print(doublons_details, row.names = FALSE)
+# Rien n'est supprimé. Les bilans NA suivants portent sur les 920 lignes.
 
 # 4. Bilan global : nombre et pourcentage de NA par variable --------------
 bilan_na <- function(donnees) {
@@ -138,5 +211,51 @@ afficher_bilan(na_sources)
 # na_global, na_par_provenance, na_sources : diagnostics pour tables/graphes.
 # provenance est une information de source, pas une mesure clinique.
 # Les NA observés ne suffisent pas à identifier leur mécanisme (MCAR/MAR/MNAR).
-# Prochaine étape : choisir les graphiques, puis discuter du traitement.
+# 6. Carte de chaleur : % de NA par variable et provenance ----------------
+# Un pourcentage permet de comparer des centres de tailles différentes.
+# Échelle commune fixe 0–100 % ; annotations pour lire les valeurs exactes.
+# Fonction réutilisable dans un futur renderPlot() de Shiny.
+graphique_na_provenance <- function(bilan = na_par_provenance) {
+  if (!requireNamespace("ggplot2", quietly = TRUE)) {
+    stop('Installer ggplot2 avec install.packages("ggplot2").')
+  }
+  d <- bilan
+  d$variable <- factor(d$variable, levels = rev(colonnes))
+  effectifs <- vapply(donnees_par_source, nrow, integer(1))
+  d$provenance <- factor(d$provenance, levels = names(fichiers))
+  etiquettes_sources <- setNames(
+    paste0(c("Cleveland", "Hongrie", "Suisse", "VA Long Beach"),
+           "\n(n = ", effectifs, ")"), names(fichiers)
+  )
+  d$etiquette <- sprintf("%.1f %%", d$pct_na)
+  d$texte_clair <- d$pct_na >= 55
+
+  ggplot2::ggplot(d, ggplot2::aes(x = provenance, y = variable, fill = pct_na)) +
+    ggplot2::geom_tile(color = "white", linewidth = 0.5) +
+    ggplot2::geom_text(ggplot2::aes(label = etiquette, color = texte_clair),
+                       size = 3.5, show.legend = FALSE) +
+    ggplot2::scale_color_manual(values = c("FALSE" = "#18212B", "TRUE" = "white")) +
+    ggplot2::scale_fill_gradient(low = "#F1F5F9", high = "#08306B",
+                                 limits = c(0, 100), breaks = seq(0, 100, 25),
+                                 name = "% de NA") +
+    ggplot2::scale_x_discrete(labels = etiquettes_sources, drop = FALSE) +
+    ggplot2::scale_y_discrete(labels = setNames(dictionnaire$libelle,
+                                               dictionnaire$nom_fr), drop = FALSE) +
+    ggplot2::labs(
+      title = "Les valeurs manquantes selon la provenance",
+      subtitle = "Pourcentage calculé dans chaque source, variable par variable",
+      x = NULL, y = NULL,
+      caption = "Source : UCI Heart Disease. Aucun retrait ni imputation.\nSeules les valeurs codées ? sont comptées comme manquantes."
+    ) +
+    ggplot2::theme_minimal(base_size = 11) +
+    ggplot2::theme(panel.grid = ggplot2::element_blank(),
+                   axis.text = ggplot2::element_text(color = "#18212B"))
+}
+
+if (requireNamespace("ggplot2", quietly = TRUE)) {
+  graphe_na <- graphique_na_provenance()
+  print(graphe_na)
+} else {
+  message('Tableaux disponibles. Pour le graphique : install.packages("ggplot2"), puis relancer le script.')
+}
 
