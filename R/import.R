@@ -337,3 +337,121 @@ tableau_vaisseaux <- table(
 )
 
 print(tableau_vaisseaux)
+
+
+# 4. Données utilisées pour cette analyse uniquement ---------------------
+
+# Exclure les lignes incomplètes uniquement de cette analyse.
+# Les objets heart et cleveland restent intacts.
+cleveland_analyse <- cleveland[
+  complete.cases(cleveland[c("nb_vaisseaux", "diagnostic")]),
+]
+
+
+# 5. Proportions et intervalles de confiance de Wilson -------------------
+
+resume_vaisseaux <- do.call(
+  rbind,
+  lapply(0:3, function(k) {
+
+    diagnostic_k <- cleveland_analyse$diagnostic[
+      cleveland_analyse$nb_vaisseaux == k
+    ]
+
+    n <- length(diagnostic_k)
+    n_malades <- sum(diagnostic_k == 1)
+
+    # Prévoir le cas d'une catégorie sans observation.
+    if (n == 0) {
+      return(data.frame(
+        nb_vaisseaux = k,
+        n = 0,
+        n_absence = 0,
+        n_presence = 0,
+        proportion = NA_real_,
+        ic_inf = NA_real_,
+        ic_sup = NA_real_
+      ))
+    }
+
+    p <- n_malades / n
+    z <- qnorm(0.975)
+
+    denominateur <- 1 + z^2 / n
+    centre <- (p + z^2 / (2 * n)) / denominateur
+    demi_largeur <- z * sqrt(
+      p * (1 - p) / n + z^2 / (4 * n^2)
+    ) / denominateur
+
+    data.frame(
+      nb_vaisseaux = k,
+      n = n,
+      n_absence = n - n_malades,
+      n_presence = n_malades,
+      proportion = p,
+      ic_inf = centre - demi_largeur,
+      ic_sup = centre + demi_largeur
+    )
+  })
+)
+
+# Tableau lisible avec les proportions en pourcentage.
+tableau_proportions <- transform(
+  resume_vaisseaux,
+  pct_presence = round(100 * proportion, 1),
+  ic95_inf_pct = round(100 * ic_inf, 1),
+  ic95_sup_pct = round(100 * ic_sup, 1)
+)
+
+print(tableau_proportions[
+  c("nb_vaisseaux", "n", "n_absence", "n_presence",
+    "pct_presence", "ic95_inf_pct", "ic95_sup_pct")
+], row.names = FALSE)
+
+
+# 6. Graphique -----------------------------------------------------------
+
+library(ggplot2)
+
+graphe_vaisseaux <- ggplot(
+  resume_vaisseaux,
+  aes(x = nb_vaisseaux, y = proportion)
+) +
+  geom_errorbar(
+    aes(ymin = ic_inf, ymax = ic_sup),
+    width = 0.12,
+    colour = "#286B8F",
+    na.rm = TRUE
+  ) +
+  geom_point(
+    size = 3.5,
+    colour = "#286B8F",
+    na.rm = TRUE
+  ) +
+  scale_x_continuous(
+    breaks = 0:3,
+    labels = paste0(
+      resume_vaisseaux$nb_vaisseaux,
+      "\n(n = ", resume_vaisseaux$n, ")"
+    )
+  ) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    breaks = seq(0, 1, 0.2),
+    labels = function(x) paste0(round(100 * x), " %")
+  ) +
+  labs(
+    title = "Diagnostic et nombre de vaisseaux visualisés",
+    subtitle = "Cleveland — proportions et intervalles de confiance à 95 %",
+    x = "Nombre de vaisseaux visualisés",
+    y = "Proportion de diagnostics positifs",
+    caption = paste0(
+      "Intervalles de Wilson. ",
+      nrow(cleveland) - nrow(cleveland_analyse),
+      " observation(s) exclue(s) de cette analyse pour valeur manquante."
+    )
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.minor = element_blank())
+
+print(graphe_vaisseaux)
