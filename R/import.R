@@ -307,3 +307,33 @@ stopifnot(
 )
 
 
+# 3. Bilan des observations disponibles ---------------------------------
+
+bilan_cleveland <- data.frame(
+  n_total = nrow(cleveland),
+  n_na_vaisseaux = sum(is.na(cleveland$nb_vaisseaux)),
+  n_na_diagnostic = sum(is.na(cleveland$diagnostic)),
+  n_utilisables = sum(
+    complete.cases(cleveland[c("nb_vaisseaux", "diagnostic")])
+  )
+)
+
+print(bilan_cleveland)
+
+# Effectifs par nombre de vaisseaux, y compris les NA.
+print(table(
+  Nb_vaisseaux = cleveland$nb_vaisseaux,
+  useNA = "ifany"
+))
+
+# Répartition globale du diagnostic à Cleveland.
+print(table(cleveland$statut, useNA = "ifany"))
+
+# Tableau croisé : conserver les catégories 0 à 3 et afficher les NA.
+tableau_vaisseaux <- table(
+  Nb_vaisseaux = factor(cleveland$nb_vaisseaux, levels = 0:3),
+  Diagnostic = cleveland$statut,
+  useNA = "ifany"
+)
+
+print(tableau_vaisseaux)
