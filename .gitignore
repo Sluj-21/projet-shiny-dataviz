@@ -3,4 +3,6 @@
 .RData
 .Ruserdata
 
-/data/all_accelerometer_data_pids_13.csv
+dataset/kaggle/
+R/import_kaggle.R
+

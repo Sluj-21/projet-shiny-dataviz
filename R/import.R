@@ -259,3 +259,51 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
   message('Tableaux disponibles. Pour le graphique : install.packages("ggplot2"), puis relancer le script.')
 }
 
+
+# 1. Transformer le diagnostic en variable binaire -----------------------
+
+# Conserver les codes d'origine, même si ce bloc est exécuté plusieurs fois.
+if (!"diagnostic_initial" %in% names(heart)) {
+  heart$diagnostic_initial <- heart$diagnostic
+}
+
+# Vérifier les codes avant transformation.
+stopifnot(
+  all(is.na(heart$diagnostic_initial) |
+        heart$diagnostic_initial %in% 0:4)
+)
+
+# 0 reste 0 ; les codes 1, 2, 3 et 4 deviennent 1.
+# Les valeurs manquantes restent NA.
+heart$diagnostic <- ifelse(
+  is.na(heart$diagnostic_initial),
+  NA_integer_,
+  as.integer(heart$diagnostic_initial > 0)
+)
+
+# Contrôler la correspondance entre ancien et nouveau diagnostic.
+table(
+  Initial = heart$diagnostic_initial,
+  Binaire = heart$diagnostic,
+  useNA = "ifany"
+)
+
+
+# 2. Sélectionner Cleveland ---------------------------------------------
+
+cleveland <- heart[heart$provenance == "cleveland", ]
+
+# Une version qualitative pour les tableaux et les légendes.
+cleveland$statut <- factor(
+  cleveland$diagnostic,
+  levels = c(0, 1),
+  labels = c("Absence", "Présence")
+)
+
+# Vérifier que nb_vaisseaux contient seulement les valeurs attendues.
+stopifnot(
+  all(is.na(cleveland$nb_vaisseaux) |
+        cleveland$nb_vaisseaux %in% 0:3)
+)
+
+
