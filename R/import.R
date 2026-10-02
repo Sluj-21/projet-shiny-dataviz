@@ -455,3 +455,136 @@ graphe_vaisseaux <- ggplot(
   theme(panel.grid.minor = element_blank())
 
 print(graphe_vaisseaux)
+
+
+# H₀ : la proportion de diagnostics positifs est identique entre les catégories.
+# H₁ : au moins une catégorie présente une proportion différente.
+
+# Tableau des effectifs : lignes = nb de vaisseaux, colonnes = diagnostic
+tab_test <- table(
+  Nb_vaisseaux = cleveland_analyse$nb_vaisseaux,
+  Diagnostic = cleveland_analyse$diagnostic
+)
+
+print(tab_test)
+
+# Calcul du chi-deux et inspection des effectifs théoriques sous H0
+test_chi2 <- suppressWarnings(chisq.test(tab_test))
+print(round(test_chi2$expected, 2))
+
+# Règle prudente : utiliser Fisher si un effectif théorique est inférieur à 5
+if (any(test_chi2$expected < 5)) {
+  test_association <- fisher.test(tab_test)
+} else {
+  test_association <- test_chi2
+}
+
+print(test_association)
+# Le test du chi2 montre une association significative entre le nombre de vaisseaux et le diagnostic.
+
+# 1. Préparer les données de Cleveland -----------------------------------
+
+variables_modele <- c(
+  "diagnostic", "age", "sexe", "type_doul_thor",
+  "pa_repos", "cholesterol", "glyc_jeun_elevee",
+  "ecg_repos", "fc_max", "angine_effort",
+  "depress_st", "pente_st", "test_thallium",
+  "nb_vaisseaux"
+)
+
+donnees_modele <- heart[
+  heart$provenance == "cleveland",
+  variables_modele
+]
+
+# Vérifier que le diagnostic a bien été transformé en 0/1.
+stopifnot(
+  all(is.na(donnees_modele$diagnostic) |
+        donnees_modele$diagnostic %in% c(0, 1))
+)
+
+# Première analyse sur cas complets :
+# les DEUX modèles doivent utiliser exactement les mêmes observations.
+# Il s'agit d'un choix provisoire, à documenter.
+n_initial <- nrow(donnees_modele)
+
+donnees_modele <- donnees_modele[
+  complete.cases(donnees_modele),
+]
+
+cat(
+  "Observations retenues :", nrow(donnees_modele),
+  "\nObservations exclues :", n_initial - nrow(donnees_modele), "\n"
+)
+
+# Ces variables sont des catégories, même si elles sont codées en nombres.
+variables_categorielles <- c(
+  "sexe", "type_doul_thor", "glyc_jeun_elevee",
+  "ecg_repos", "angine_effort", "pente_st",
+  "test_thallium", "nb_vaisseaux"
+)
+
+donnees_modele[variables_categorielles] <- lapply(
+  donnees_modele[variables_categorielles],
+  factor
+)
+
+donnees_modele$nb_vaisseaux <- relevel(
+  donnees_modele$nb_vaisseaux,
+  ref = "0"
+)
+
+
+# 2. Modèle réduit : toutes les autres variables -------------------------
+
+modele_reduit <- glm(
+  diagnostic ~ age + sexe + type_doul_thor +
+    pa_repos + cholesterol + glyc_jeun_elevee +
+    ecg_repos + fc_max + angine_effort +
+    depress_st + pente_st + test_thallium,
+  family = binomial(),
+  data = donnees_modele
+)
+
+
+# 3. Modèle complet : ajout du nombre de vaisseaux ------------------------
+
+modele_complet <- update(
+  modele_reduit,
+  . ~ . + nb_vaisseaux
+)
+
+summary(modele_complet)
+
+
+# 4. Apport global de nb_vaisseaux, ajusté sur les autres variables -------
+
+test_apport_vaisseaux <- anova(
+  modele_reduit,
+  modele_complet,
+  test = "LRT"
+)
+
+print(test_apport_vaisseaux)
+# Donc le nombre de vaisseaux visualisés apporte une information significative
+# sur le diagnostic, même après ajustement sur les autres variables.
+
+# 5. Odds ratios ajustés des catégories de nb_vaisseaux -------------------
+
+termes_vaisseaux <- grep(
+  "^nb_vaisseaux",
+  names(coef(modele_complet)),
+  value = TRUE
+)
+
+ic <- confint(modele_complet, parm = termes_vaisseaux)
+
+or_ajustes <- data.frame(
+  terme = termes_vaisseaux,
+  OR_ajuste = exp(coef(modele_complet)[termes_vaisseaux]),
+  IC95_inf = exp(ic[, 1]),
+  IC95_sup = exp(ic[, 2]),
+  row.names = NULL
+)
+
+print(or_ajustes, digits = 3)
