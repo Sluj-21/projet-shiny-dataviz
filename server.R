@@ -27,22 +27,18 @@ stopifnot(all(is.na(donnees_uci$diagnostic_initial) |
 donnees_uci$diagnostic <- ifelse(is.na(donnees_uci$diagnostic_initial),
                                 NA_integer_, as.integer(donnees_uci$diagnostic_initial > 0))
 
-# Proportions et intervalles de Wilson ; retourne aussi les catégories vides.
-calcul_proportions <- function(d) {
-  do.call(rbind, lapply(0:3, function(k) {
-    y <- d$diagnostic[d$nb_vaisseaux == k]
-    n <- length(y)
-    if (!n) return(data.frame(nb_vaisseaux = k, n = 0, n_presence = 0,
-                              proportion = NA_real_, ic_inf = NA_real_, ic_sup = NA_real_))
-    p <- mean(y == 1)
-    z <- qnorm(0.975)
-    denom <- 1 + z^2 / n
-    centre <- (p + z^2 / (2 * n)) / denom
-    largeur <- z * sqrt(p * (1 - p) / n + z^2 / (4 * n^2)) / denom
-    data.frame(nb_vaisseaux = k, n = n, n_presence = sum(y == 1),
-               proportion = p, ic_inf = centre - largeur, ic_sup = centre + largeur)
-  }))
-}
+# Sélection des seules variables cliniques : éviter la fuite du diagnostic
+# original et ne pas inclure la provenance dans la formule diagnostic ~ .
+variables_modelisation <- import_uci$colonnes
+predicteurs <- setdiff(variables_modelisation, "diagnostic")
+cas_complets <- complete.cases(donnees_uci[variables_modelisation])
+donnees_modelisation <- donnees_uci[cas_complets, variables_modelisation]
+variables_categorielles <- c("sexe", "type_doul_thor", "glyc_jeun_elevee",
+  "ecg_repos", "angine_effort", "pente_st", "test_thallium", "nb_vaisseaux")
+donnees_modelisation[variables_categorielles] <-
+  lapply(donnees_modelisation[variables_categorielles], factor)
+libelles_sources <- c(cleveland = "Cleveland", hungarian = "Hongrie",
+                       switzerland = "Suisse", va = "VA Long Beach")
 
 function(input, output, session) {
   output$indicateurs <- renderUI({
@@ -123,85 +119,100 @@ function(input, output, session) {
       options = list(pageLength = 14, scrollX = TRUE)), "pct_na", 2)
   })
 
-  cleveland <- donnees_uci[donnees_uci$provenance == "cleveland", ]
-  complet <- complete.cases(cleveland[c("nb_vaisseaux", "diagnostic")])
-  cleveland_analyse <- cleveland[complet, ]
-  resume <- calcul_proportions(cleveland_analyse)
-  output$bilan_cleveland <- renderTable({
-    data.frame(Total = nrow(cleveland),
-      NA_vaisseaux = sum(is.na(cleveland$nb_vaisseaux)),
-      NA_diagnostic = sum(is.na(cleveland$diagnostic)),
-      Utilisables_pour_le_graphique = sum(complet))
+  # Garder un échantillon commun, indépendant de la variable retirée.
+  updateSelectInput(session, "variable_modele",
+    choices = setNames(predicteurs, import_uci$dictionnaire$libelle[
+      match(predicteurs, import_uci$dictionnaire$nom_fr)]),
+    selected = "nb_vaisseaux")
+  output$bilan_modelisation <- renderText({
+    paste(nrow(donnees_modelisation), "lignes complètes retenues sur",
+      nrow(donnees_uci), "lignes nettoyées ;", sum(!cas_complets),
+      "lignes exclues pour au moins une valeur manquante. Aucune imputation.")
   })
-  output$croisement <- renderTable({
-    as.data.frame.matrix(table(
-      Nb_vaisseaux = factor(cleveland$nb_vaisseaux, levels = 0:3),
-      Diagnostic = factor(cleveland$diagnostic, levels = 0:1,
-                          labels = c("Absence", "Présence")), useNA = "ifany"))
-  }, rownames = TRUE)
-  output$proportions <- renderPlot({
-    validate(need(nrow(cleveland_analyse) > 0, "Aucune observation exploitable."))
-    ggplot(resume, aes(nb_vaisseaux, proportion)) +
-      geom_errorbar(aes(ymin = ic_inf, ymax = ic_sup), width = .12,
-                    colour = "#165DDE", na.rm = TRUE) +
-      geom_point(size = 3.5, colour = "#165DDE", na.rm = TRUE) +
-      scale_x_continuous(breaks = 0:3, labels = paste0(0:3, "\n(n = ", resume$n, ")")) +
-      scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, .2),
-                         labels = function(x) paste0(round(100*x), " %")) +
-      labs(title = "Proportion de diagnostics positifs à Cleveland",
-           x = "Nombre de vaisseaux visualisés", y = "Proportion de diagnostics positifs",
-           caption = paste(sum(!complet), "observation(s) exclue(s) pour valeur manquante. IC de Wilson à 95 %.")) +
-      theme_minimal(base_size = 12)
-  }, res = 110)
-  output$table_proportions <- renderTable({
-    data.frame(Vaisseaux = resume$nb_vaisseaux, Effectif = resume$n,
-      Diagnostics_positifs = resume$n_presence, Pourcentage = 100*resume$proportion,
-      IC95_inf = 100*resume$ic_inf, IC95_sup = 100*resume$ic_sup)
-  }, digits = 1)
+  output$effectifs_modelisation <- renderTable({
+    sources <- names(import_uci$fichiers)
+    disponibles <- as.integer(table(factor(donnees_uci$provenance, levels = sources)))
+    retenues <- as.integer(table(factor(donnees_uci$provenance[cas_complets], levels = sources)))
+    data.frame(Provenance = unname(libelles_sources[sources]),
+      "Lignes nettoyées" = disponibles, "Lignes retenues" = retenues,
+      "Lignes exclues (NA)" = disponibles - retenues, check.names = FALSE)
+  })
+  formule_reduite <- reactive({
+    req(input$variable_modele %in% predicteurs)
+    reformulate(setdiff(predicteurs, input$variable_modele), response = "diagnostic")
+  })
+  output$formules_modeles <- renderText({
+    paste("Modèle complet : diagnostic ~ .",
+      paste("Modèle réduit :", paste(deparse(formule_reduite()), collapse = " ")),
+      sep = "\n")
+  })
 
-  # Calcul explicite sur bouton pour séparer description et modélisation.
-  modeles <- eventReactive(input$calcul_modeles, {
+  # L'ANOVA de modèles emboîtés utilise les mêmes cas complets et la loi binomiale.
+  modeles <- reactive({
+    req(input$variable_modele %in% predicteurs)
     tryCatch({
-      variables <- c("diagnostic", "age", "sexe", "type_doul_thor", "pa_repos",
-        "cholesterol", "glyc_jeun_elevee", "ecg_repos", "fc_max", "angine_effort",
-        "depress_st", "pente_st", "test_thallium", "nb_vaisseaux")
-      d <- cleveland[variables]
-      d <- d[complete.cases(d), ]
-      if (length(unique(d$diagnostic)) != 2) stop("Les deux diagnostics doivent être représentés.")
-      cats <- c("sexe", "type_doul_thor", "glyc_jeun_elevee", "ecg_repos",
-                "angine_effort", "pente_st", "test_thallium", "nb_vaisseaux")
-      d[cats] <- lapply(d[cats], factor)
-      if (any(vapply(d[cats], nlevels, integer(1)) < 2)) stop("Une catégorie n'a qu'une modalité observée.")
-      d$nb_vaisseaux <- relevel(d$nb_vaisseaux, "0")
+      d <- donnees_modelisation
+      if (length(unique(d$diagnostic)) != 2)
+        stop("Les deux diagnostics doivent être représentés.")
+      if (any(vapply(d[variables_categorielles], nlevels, integer(1)) < 2))
+        stop("Une variable catégorielle n'a qu'une modalité observée.")
       avertissements <- character()
       resultat <- withCallingHandlers({
-        reduit <- glm(diagnostic ~ age + sexe + type_doul_thor + pa_repos +
-          cholesterol + glyc_jeun_elevee + ecg_repos + fc_max + angine_effort +
-          depress_st + pente_st + test_thallium, family = binomial(), data = d)
-        entier <- update(reduit, . ~ . + nb_vaisseaux)
+        entier <- glm(diagnostic ~ ., family = binomial(), data = d, na.action = na.fail)
+        reduit <- glm(formule_reduite(), family = binomial(), data = d, na.action = na.fail)
         if (!reduit$converged || !entier$converged ||
-            anyNA(coef(reduit)) || anyNA(coef(entier))) {
+            anyNA(coef(reduit)) || anyNA(coef(entier)))
           stop("Ajustement instable ou coefficients non identifiables : examiner les catégories et les effectifs.")
-        }
-        capture.output({
-          cat("Cas complets utilisés :", nrow(d), "sur", nrow(cleveland), "\n\n")
-          cat("Diagnostics dans l'échantillon du modèle :\n")
-          print(table(d$diagnostic))
-          cat("\nTest global de l'ajout de nb_vaisseaux :\n")
-          print(anova(reduit, entier, test = "LRT"))
-          cat("\nAIC (plus faible = compromis ajustement/complexité plus favorable) :\n")
-          print(AIC(reduit, entier))
+        if (entier$df.residual <= 0 || reduit$df.residual - entier$df.residual <= 0)
+          stop("Effectif ou degrés de liberté insuffisants pour comparer les modèles.")
+        comparaison <- anova(reduit, entier, test = "LRT")
+        texte <- capture.output({
+          cat("Variable évaluée :", input$variable_modele, "\n")
+          cat("Cas complets utilisés dans chaque modèle :", nrow(d), "\n")
+          cat("Diagnostics absents :", sum(d$diagnostic == 0),
+              "— diagnostics présents :", sum(d$diagnostic == 1), "\n\n")
+          cat("ANOVA — test du rapport de vraisemblance :\n")
+          # Traduire les colonnes affichées du tableau produit par anova().
+          tableau <- data.frame(
+            Modèle = c("Réduit", "Complet"),
+            "DDL résiduels" = comparaison[[1]],
+            "Déviance résiduelle" = comparaison[[2]],
+            "Écart de DDL" = comparaison[[3]],
+            "Écart de déviance" = comparaison[[4]],
+            "Valeur p" = comparaison[[5]], check.names = FALSE)
+          print(tableau, row.names = FALSE)
+          cat("\nAIC (compromis entre ajustement et complexité ; plus faible = meilleur) :\n")
+          print(data.frame(Modèle = c("Réduit", "Complet"),
+                           AIC = c(AIC(reduit), AIC(entier))), row.names = FALSE)
         })
+        list(texte = texte, graphique = data.frame(
+          Modèle = factor(c("Réduit", "Complet"), levels = c("Réduit", "Complet")),
+          Déviance = c(deviance(reduit), deviance(entier))))
       }, warning = function(w) {
         avertissements <<- c(avertissements, conditionMessage(w))
         invokeRestart("muffleWarning")
       })
       if (length(avertissements)) {
-        resultat <- c("AVERTISSEMENTS : interprétation à vérifier avant conclusion.",
-                      unique(avertissements), "", resultat)
+        # Les messages natifs de R peuvent dépendre de la langue de la session.
+        resultat$texte <- c("AVERTISSEMENT : R signale un ajustement potentiellement instable (convergence ou probabilités extrêmes). Interprétation à vérifier.",
+                            "", resultat$texte)
       }
-      paste(resultat, collapse = "\n")
-    }, error = function(e) paste("Modélisation non disponible :", conditionMessage(e)))
+      resultat$texte <- paste(resultat$texte, collapse = "\n")
+      resultat
+    }, error = function(e) list(texte = paste("Modélisation non disponible :", conditionMessage(e)),
+                                graphique = NULL))
   })
-  output$resultat_modeles <- renderText({ req(input$calcul_modeles > 0); modeles() })
+  output$resultat_modeles <- renderText(modeles()$texte)
+  output$comparaison_modeles <- renderPlot({
+    resultat <- modeles()
+    validate(need(!is.null(resultat$graphique), "Graphique indisponible : consulter le résultat ci-dessus."))
+    ggplot(resultat$graphique, aes(Modèle, Déviance, fill = Modèle)) +
+      geom_col(width = .5, show.legend = FALSE) +
+      geom_text(aes(label = sprintf("%.2f", Déviance)), vjust = -.5) +
+      scale_fill_manual(values = c("Réduit" = "#B8D4FA", "Complet" = "#165DDE")) +
+      scale_y_continuous(expand = expansion(mult = c(0, .12))) +
+      labs(title = paste("Apport de la variable", input$variable_modele),
+           x = NULL, y = "Déviance résiduelle") +
+      theme_minimal(base_size = 12)
+  }, res = 110)
 }

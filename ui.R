@@ -36,7 +36,7 @@ fluidPage(
   div(class = "hero",
     div(class = "eyebrow", "UCI HEART DISEASE / EXPLORATION"),
     h1("Comprendre le diagnostic cardiaque"),
-    p("Des données de quatre centres à l'analyse de Cleveland : documenter les choix, visualiser les manques et mesurer les associations.")
+    p("Des données de quatre centres à la modélisation : documenter les choix, visualiser les manques et mesurer les associations.")
   ),
   uiOutput("indicateurs"),
   tabsetPanel(
@@ -96,20 +96,26 @@ fluidPage(
       plotOutput("origine_na", height = "500px"),
       h4("Détail par variable et provenance"), DT::DTOutput("na_detail")
     ),
-    tabPanel("3 · Cleveland",
-      p("Question : le nombre de vaisseaux visualisés apporte-t-il une information sur le diagnostic ?"),
+    tabPanel("3 · Modélisation",
+      p("Évaluer l'apport d'une variable au diagnostic en comparant deux régressions logistiques."),
       p(class = "note", "Diagnostic binaire : 0 = absence et 1 = présence selon le critère UCI. Le code 0 ne signifie pas l'absence de tout problème cardiaque."),
-      h4("Observations disponibles"), tableOutput("bilan_cleveland"),
-      h4("Effectifs croisés, y compris les valeurs manquantes"), tableOutput("croisement"),
-      plotOutput("proportions", height = "430px"),
-      tableOutput("table_proportions"),
-      p(class = "note", "Les points décrivent une association brute. Les intervalles de Wilson à 95 % indiquent l'incertitude sur chaque proportion, sans ajustement pour comparaisons multiples."),
-      hr(), h4("Association ajustée : comparaison de deux régressions logistiques"),
-      p("Modèle réduit : les 12 autres variables explicatives. Modèle complet : ajout de nb_vaisseaux comme catégorie. Les deux modèles utilisent exactement les mêmes cas complets de Cleveland."),
-      p("Les variables catégorielles sont traitées comme des facteurs. Les variables continues ont un effet linéaire sur le logit. Aucun terme d'interaction n'est ajouté."),
-      actionButton("calcul_modeles", "Calculer la comparaison", class = "btn-primary"),
+      selectInput("variable_modele", "Variable dont on souhaite évaluer l'apport", choices = NULL),
+      div(class = "callout",
+        p(strong("Aucune imputation. "), "Les quatre centres sont réunis après dédoublonnage et recodage des zéros ciblés. Seules les lignes sans NA sur le diagnostic et les 13 variables explicatives sont retenues."),
+        p("Les deux modèles sont ajustés sur exactement les mêmes lignes, y compris lorsque la variable choisie est retirée du modèle réduit. La provenance et le diagnostic original ne sont pas des variables explicatives.")
+      ),
+      h4("Composition du jeu de données utilisé"),
+      textOutput("bilan_modelisation"),
+      tableOutput("effectifs_modelisation"),
+      h4("Modèles comparés"),
+      p("Modèle complet : diagnostic ~ . sur les 13 variables cliniques. Modèle réduit : toutes ces variables sauf celle choisie."),
+      p("Les variables catégorielles, y compris le nombre de vaisseaux, sont traitées comme des facteurs. Les variables continues ont un effet linéaire sur le logit. Aucun terme d'interaction n'est ajouté."),
+      verbatimTextOutput("formules_modeles"),
+      h4("Comparaison par ANOVA"),
+      p("La comparaison est recalculée à chaque changement de variable. Le test du rapport de vraisemblance compare le modèle réduit au modèle complet."),
       verbatimTextOutput("resultat_modeles"),
-      p(class = "note", "Le test du rapport de vraisemblance évalue l'apport de nb_vaisseaux à l'ajustement. Il ne démontre ni causalité ni gain prédictif hors échantillon. Les modèles restent exploratoires." )
+      plotOutput("comparaison_modeles", height = "330px"),
+      p(class = "note", "Une faible valeur p indique que la variable améliore l'ajustement du modèle en présence des autres variables. Le graphique montre la déviance résiduelle : plus elle est faible, meilleur est l'ajustement aux données utilisées. Cela ne démontre ni causalité ni gain prédictif hors échantillon. Les modèles restent exploratoires.")
     )
   ),
   div(class = "footer", "UCI Heart Disease · Janosi et al. (1989) · DOI 10.24432/C52P4X · CC BY 4.0")
