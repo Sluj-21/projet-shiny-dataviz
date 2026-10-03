@@ -185,7 +185,35 @@ function(input, output, session) {
           print(data.frame(Modèle = c("Réduit", "Complet"),
                            AIC = c(AIC(reduit), AIC(entier))), row.names = FALSE)
         })
-        list(texte = texte, graphique = data.frame(
+        # Interprétation de l'apport conditionnel de la variable et du choix par AIC.
+        libelle <- import_uci$dictionnaire$libelle[
+          match(input$variable_modele, import_uci$dictionnaire$nom_fr)]
+        valeur_p <- comparaison[[5]][2]
+        ecart_aic <- AIC(reduit) - AIC(entier)
+        conclusion_anova <- if (!is.finite(valeur_p)) {
+          "L'ANOVA ne permet pas de conclure : la valeur p n'est pas disponible."
+        } else if (valeur_p < .05) {
+          paste0("L'ANOVA montre que la variable « ", libelle,
+            " » apporte une information statistiquement significative au seuil de 5 % pour expliquer la présence de maladie cardiaque, en tenant compte des autres variables (p = ",
+            format.pval(valeur_p, digits = 3, eps = .001), ").")
+        } else {
+          paste0("L'ANOVA ne met pas en évidence d'apport statistiquement significatif de la variable « ",
+            libelle, " » au seuil de 5 %, en tenant compte des autres variables (p = ",
+            format.pval(valeur_p, digits = 3, eps = .001),
+            "). Ce résultat ne prouve pas l'absence d'association.")
+        }
+        conclusion_aic <- if (abs(ecart_aic) < 1e-8) {
+          "Les deux modèles ont le même AIC : ce critère ne les départage pas."
+        } else {
+          paste0("Parmi ces deux modèles, l'AIC privilégie le modèle ",
+            if (ecart_aic > 0) "complet, qui conserve" else "réduit, qui retire",
+            " la variable « ", libelle, " » (AIC réduit = ",
+            sprintf("%.2f", AIC(reduit)), ", AIC complet = ",
+            sprintf("%.2f", AIC(entier)), "; écart = ",
+            sprintf("%.2f", abs(ecart_aic)), ").",
+            if (abs(ecart_aic) < 2) " L'écart inférieur à 2 indique que les deux modèles restent proches selon ce critère." else "")
+        }
+        list(texte = texte, conclusion = c(conclusion_anova, conclusion_aic), graphique = data.frame(
           Modèle = factor(c("Réduit", "Complet"), levels = c("Réduit", "Complet")),
           Déviance = c(deviance(reduit), deviance(entier))))
       }, warning = function(w) {
@@ -194,6 +222,8 @@ function(input, output, session) {
       })
       if (length(avertissements)) {
         # Les messages natifs de R peuvent dépendre de la langue de la session.
+        resultat$conclusion <- c("L'ajustement a produit un avertissement : les conclusions suivantes doivent être interprétées avec prudence.",
+                                  resultat$conclusion)
         resultat$texte <- c("AVERTISSEMENT : R signale un ajustement potentiellement instable (convergence ou probabilités extrêmes). Interprétation à vérifier.",
                             "", resultat$texte)
       }
@@ -203,6 +233,11 @@ function(input, output, session) {
                                 graphique = NULL))
   })
   output$resultat_modeles <- renderText(modeles()$texte)
+  output$conclusion_modeles <- renderUI({
+    resultat <- modeles()
+    if (is.null(resultat$conclusion)) return(p(resultat$texte))
+    tagList(lapply(resultat$conclusion, p))
+  })
   output$comparaison_modeles <- renderPlot({
     resultat <- modeles()
     validate(need(!is.null(resultat$graphique), "Graphique indisponible : consulter le résultat ci-dessus."))

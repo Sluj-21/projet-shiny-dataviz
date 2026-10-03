@@ -35,12 +35,12 @@ fluidPage(
   "))),
   div(class = "hero",
     div(class = "eyebrow", "UCI HEART DISEASE / EXPLORATION"),
-    h1("Comprendre le diagnostic cardiaque"),
-    p("Des données de quatre centres à la modélisation : documenter les choix, visualiser les manques et mesurer les associations.")
+    h1("Diagnostic cardiaque et prédiction"),
+    p("Quelles variables cliniques permettent d’expliquer la présence d’une maladie cardiaque, et dans quelle mesure peut-on la prédire ? Cette étude s’appuie sur le jeu de données Heart Disease du dépôt UCI, issu de quatre centres : Cleveland, la Hongrie, la Suisse et le VA Medical Center de Long Beach.")
   ),
-  uiOutput("indicateurs"),
   tabsetPanel(
     tabPanel("1 · Données",
+      uiOutput("indicateurs"),
       fluidRow(
         column(3,
           selectInput("source_apercu", "Provenance", choices = c("Toutes" = "toutes")),
@@ -115,6 +115,8 @@ fluidPage(
       p("La comparaison est recalculée à chaque changement de variable. Le test du rapport de vraisemblance compare le modèle réduit au modèle complet."),
       verbatimTextOutput("resultat_modeles"),
       plotOutput("comparaison_modeles", height = "330px"),
+      h4("Conclusion de la comparaison"),
+      div(class = "callout", uiOutput("conclusion_modeles")),
       p(class = "note", "Une faible valeur p indique que la variable améliore l'ajustement du modèle en présence des autres variables. Le graphique montre la déviance résiduelle : plus elle est faible, meilleur est l'ajustement aux données utilisées. Cela ne démontre ni causalité ni gain prédictif hors échantillon. Les modèles restent exploratoires.")
     )
   ),
