@@ -7,7 +7,8 @@
 # source("R/import.R", encoding = "UTF-8")
 # Importation et tableaux : R de base. Graphique : package ggplot2.
 # À installer une seule fois si nécessaire : install.packages("ggplot2")
-# Ce script ne supprime ni ligne ni variable et n'impute aucune valeur.
+# Une occurrence par profil répété dans une même source ; zéros ciblés en NA.
+# Aucun fichier source n’est modifié et aucune valeur n’est imputée.
 
 # 1. Sélection explicite : une seule version par source -------------------
 # Ne pas importer tous les fichiers .data : plusieurs sont des variantes
@@ -78,21 +79,13 @@ names(donnees_par_source) <- names(fichiers)
 heart <- do.call(rbind, donnees_par_source)
 rownames(heart) <- NULL
 
-# Ne pas remplacer les zéros par NA : certains sont des codes valides.
-# Les valeurs suspectes non marquées par '?' restent à examiner séparément.
+# Seuls les zéros de pa_repos et cholesterol seront recodés plus bas.
+# Les zéros valides des autres variables sont conservés.
 # La documentation des fichiers bruts mentionne -9 comme marqueur manquant ;
 # on le signale s'il apparaît ici, sans décider silencieusement d'un recodage.
 if (any(as.matrix(heart[colonnes]) == -9, na.rm = TRUE)) {
   warning("Présence de -9 : vérifier leur signification avant recodage.")
 }
-
-cat("\nDimensions du tableau fusionné :\n")
-print(dim(heart))
-cat("\nPremières lignes (head) :\n")
-print(head(heart), row.names = FALSE)
-cat("\nNombre de lignes par provenance :\n")
-print(table(heart$provenance))
-# head() montre Cleveland en premier car ses lignes sont empilées en premier.
 
 # 3 bis. Recherche de doublons AVANT tout traitement des NA ---------------
 # Une ligne identique n'est pas nécessairement le même patient : aucun
@@ -150,7 +143,65 @@ cat("Nombre de profils présents dans plusieurs sources : ",
     sum(nb_sources > 1), "\n", sep = "")
 cat("\nToutes les lignes impliquées, première occurrence comprise :\n")
 print(doublons_details, row.names = FALSE)
-# Rien n'est supprimé. Les bilans NA suivants portent sur les 920 lignes.
+# 3 ter. Nettoyage traçable ----------------------------------------------
+# Retirer les occurrences après la première dans CHAQUE source, sur les
+# 14 valeurs originales. Détecter avant recodage évite de créer de faux
+# doublons en confondant un zéro initial et un NA initial.
+heart_brut <- heart
+retirer <- duplicated(heart[c(colonnes, "provenance")])
+details$decision <- ifelse(retirer, "Retirée", "Conservée")
+doublons_details <- details[est_doublon, ]
+doublons_details <- doublons_details[order(doublons_details$groupe_profil), ]
+doublons_supprimes <- details[retirer, ]
+heart <- heart[!retirer, ]
+rownames(heart) <- NULL
+heart_avant_recodage <- heart
+
+# Règle analytique : zéro n'est pas une mesure exploitable de pression au
+# repos ou de cholestérol total dans cette cohorte. Le traiter comme indisponible.
+# Les sources physiologiques motivent ce choix, sans prouver que les auteurs
+# d'UCI utilisaient systématiquement zéro comme code de donnée manquante.
+# Références détaillées et liens dans l'onglet Valeurs manquantes de Shiny.
+variables_zero_na <- c("pa_repos", "cholesterol")
+journal_recodage <- do.call(rbind, lapply(names(fichiers), function(src) {
+  d <- heart_avant_recodage[heart_avant_recodage$provenance == src, ]
+  data.frame(
+    provenance = src, variable = variables_zero_na, n_observations = nrow(d),
+    n_na_initiaux = vapply(d[variables_zero_na], function(x) sum(is.na(x)), integer(1)),
+    n_zeros_recodes = vapply(d[variables_zero_na], function(x) sum(x == 0, na.rm = TRUE), integer(1)),
+    row.names = NULL
+  )
+}))
+for (variable in variables_zero_na) {
+  est_zero <- !is.na(heart[[variable]]) & heart[[variable]] == 0
+  heart[[variable]][est_zero] <- NA_real_
+}
+journal_recodage$n_na_finaux <- journal_recodage$n_na_initiaux + journal_recodage$n_zeros_recodes
+journal_recodage$pct_na_finaux <- 100 * journal_recodage$n_na_finaux / journal_recodage$n_observations
+
+# Reconstituer la liste : tous les résumés suivants utilisent le même nettoyage.
+donnees_par_source <- setNames(lapply(names(fichiers), function(src) {
+  heart[heart$provenance == src, ]
+}), names(fichiers))
+bilan_nettoyage <- data.frame(
+  n_brut = nrow(heart_brut), n_doublons_retires = sum(retirer),
+  n_final = nrow(heart), n_zeros_recodes = sum(journal_recodage$n_zeros_recodes)
+)
+# Décomposer les NA pour visualiser la contribution du recodage.
+na_origine <- rbind(
+  data.frame(variable = colonnes, origine = "NA initiaux",
+             nombre = unname(colSums(is.na(heart_avant_recodage[colonnes])))),
+  data.frame(variable = colonnes, origine = "Zéros recodés",
+             nombre = unname(colSums(is.na(heart[colonnes])) -
+                             colSums(is.na(heart_avant_recodage[colonnes]))))
+)
+na_origine$pct <- 100 * na_origine$nombre / nrow(heart)
+cat("\nBilan du nettoyage :\n")
+print(bilan_nettoyage, row.names = FALSE)
+print(journal_recodage, row.names = FALSE)
+cat("\nAperçu après nettoyage :\n")
+print(head(heart), row.names = FALSE)
+
 
 # 4. Bilan global : nombre et pourcentage de NA par variable --------------
 bilan_na <- function(donnees) {
@@ -245,7 +296,7 @@ graphique_na_provenance <- function(bilan = na_par_provenance) {
       title = "Les valeurs manquantes selon la provenance",
       subtitle = "Pourcentage calculé dans chaque source, variable par variable",
       x = NULL, y = NULL,
-      caption = "Source : UCI Heart Disease. Aucun retrait ni imputation.\nSeules les valeurs codées ? sont comptées comme manquantes."
+      caption = "Source : UCI Heart Disease. Après dédoublonnage et recodage ciblé des zéros.\nNA initiaux + zéros de pression au repos et de cholestérol ; aucune imputation."
     ) +
     ggplot2::theme_minimal(base_size = 11) +
     ggplot2::theme(panel.grid = ggplot2::element_blank(),
@@ -259,332 +310,3 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
   message('Tableaux disponibles. Pour le graphique : install.packages("ggplot2"), puis relancer le script.')
 }
 
-
-# 1. Transformer le diagnostic en variable binaire -----------------------
-
-# Conserver les codes d'origine, même si ce bloc est exécuté plusieurs fois.
-if (!"diagnostic_initial" %in% names(heart)) {
-  heart$diagnostic_initial <- heart$diagnostic
-}
-
-# Vérifier les codes avant transformation.
-stopifnot(
-  all(is.na(heart$diagnostic_initial) |
-        heart$diagnostic_initial %in% 0:4)
-)
-
-# 0 reste 0 ; les codes 1, 2, 3 et 4 deviennent 1.
-# Les valeurs manquantes restent NA.
-heart$diagnostic <- ifelse(
-  is.na(heart$diagnostic_initial),
-  NA_integer_,
-  as.integer(heart$diagnostic_initial > 0)
-)
-
-# Contrôler la correspondance entre ancien et nouveau diagnostic.
-table(
-  Initial = heart$diagnostic_initial,
-  Binaire = heart$diagnostic,
-  useNA = "ifany"
-)
-
-
-# 2. Sélectionner Cleveland ---------------------------------------------
-
-cleveland <- heart[heart$provenance == "cleveland", ]
-
-# Une version qualitative pour les tableaux et les légendes.
-cleveland$statut <- factor(
-  cleveland$diagnostic,
-  levels = c(0, 1),
-  labels = c("Absence", "Présence")
-)
-
-# Vérifier que nb_vaisseaux contient seulement les valeurs attendues.
-stopifnot(
-  all(is.na(cleveland$nb_vaisseaux) |
-        cleveland$nb_vaisseaux %in% 0:3)
-)
-
-
-# 3. Bilan des observations disponibles ---------------------------------
-
-bilan_cleveland <- data.frame(
-  n_total = nrow(cleveland),
-  n_na_vaisseaux = sum(is.na(cleveland$nb_vaisseaux)),
-  n_na_diagnostic = sum(is.na(cleveland$diagnostic)),
-  n_utilisables = sum(
-    complete.cases(cleveland[c("nb_vaisseaux", "diagnostic")])
-  )
-)
-
-print(bilan_cleveland)
-
-# Effectifs par nombre de vaisseaux, y compris les NA.
-print(table(
-  Nb_vaisseaux = cleveland$nb_vaisseaux,
-  useNA = "ifany"
-))
-
-# Répartition globale du diagnostic à Cleveland.
-print(table(cleveland$statut, useNA = "ifany"))
-
-# Tableau croisé : conserver les catégories 0 à 3 et afficher les NA.
-tableau_vaisseaux <- table(
-  Nb_vaisseaux = factor(cleveland$nb_vaisseaux, levels = 0:3),
-  Diagnostic = cleveland$statut,
-  useNA = "ifany"
-)
-
-print(tableau_vaisseaux)
-
-
-# 4. Données utilisées pour cette analyse uniquement ---------------------
-
-# Exclure les lignes incomplètes uniquement de cette analyse.
-# Les objets heart et cleveland restent intacts.
-cleveland_analyse <- cleveland[
-  complete.cases(cleveland[c("nb_vaisseaux", "diagnostic")]),
-]
-
-
-# 5. Proportions et intervalles de confiance de Wilson -------------------
-
-resume_vaisseaux <- do.call(
-  rbind,
-  lapply(0:3, function(k) {
-
-    diagnostic_k <- cleveland_analyse$diagnostic[
-      cleveland_analyse$nb_vaisseaux == k
-    ]
-
-    n <- length(diagnostic_k)
-    n_malades <- sum(diagnostic_k == 1)
-
-    # Prévoir le cas d'une catégorie sans observation.
-    if (n == 0) {
-      return(data.frame(
-        nb_vaisseaux = k,
-        n = 0,
-        n_absence = 0,
-        n_presence = 0,
-        proportion = NA_real_,
-        ic_inf = NA_real_,
-        ic_sup = NA_real_
-      ))
-    }
-
-    p <- n_malades / n
-    z <- qnorm(0.975)
-
-    denominateur <- 1 + z^2 / n
-    centre <- (p + z^2 / (2 * n)) / denominateur
-    demi_largeur <- z * sqrt(
-      p * (1 - p) / n + z^2 / (4 * n^2)
-    ) / denominateur
-
-    data.frame(
-      nb_vaisseaux = k,
-      n = n,
-      n_absence = n - n_malades,
-      n_presence = n_malades,
-      proportion = p,
-      ic_inf = centre - demi_largeur,
-      ic_sup = centre + demi_largeur
-    )
-  })
-)
-
-# Tableau lisible avec les proportions en pourcentage.
-tableau_proportions <- transform(
-  resume_vaisseaux,
-  pct_presence = round(100 * proportion, 1),
-  ic95_inf_pct = round(100 * ic_inf, 1),
-  ic95_sup_pct = round(100 * ic_sup, 1)
-)
-
-print(tableau_proportions[
-  c("nb_vaisseaux", "n", "n_absence", "n_presence",
-    "pct_presence", "ic95_inf_pct", "ic95_sup_pct")
-], row.names = FALSE)
-
-
-# 6. Graphique -----------------------------------------------------------
-
-library(ggplot2)
-
-graphe_vaisseaux <- ggplot(
-  resume_vaisseaux,
-  aes(x = nb_vaisseaux, y = proportion)
-) +
-  geom_errorbar(
-    aes(ymin = ic_inf, ymax = ic_sup),
-    width = 0.12,
-    colour = "#286B8F",
-    na.rm = TRUE
-  ) +
-  geom_point(
-    size = 3.5,
-    colour = "#286B8F",
-    na.rm = TRUE
-  ) +
-  scale_x_continuous(
-    breaks = 0:3,
-    labels = paste0(
-      resume_vaisseaux$nb_vaisseaux,
-      "\n(n = ", resume_vaisseaux$n, ")"
-    )
-  ) +
-  scale_y_continuous(
-    limits = c(0, 1),
-    breaks = seq(0, 1, 0.2),
-    labels = function(x) paste0(round(100 * x), " %")
-  ) +
-  labs(
-    title = "Diagnostic et nombre de vaisseaux visualisés",
-    subtitle = "Cleveland — proportions et intervalles de confiance à 95 %",
-    x = "Nombre de vaisseaux visualisés",
-    y = "Proportion de diagnostics positifs",
-    caption = paste0(
-      "Intervalles de Wilson. ",
-      nrow(cleveland) - nrow(cleveland_analyse),
-      " observation(s) exclue(s) de cette analyse pour valeur manquante."
-    )
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(panel.grid.minor = element_blank())
-
-print(graphe_vaisseaux)
-
-
-# H₀ : la proportion de diagnostics positifs est identique entre les catégories.
-# H₁ : au moins une catégorie présente une proportion différente.
-
-# Tableau des effectifs : lignes = nb de vaisseaux, colonnes = diagnostic
-tab_test <- table(
-  Nb_vaisseaux = cleveland_analyse$nb_vaisseaux,
-  Diagnostic = cleveland_analyse$diagnostic
-)
-
-print(tab_test)
-
-# Calcul du chi-deux et inspection des effectifs théoriques sous H0
-test_chi2 <- suppressWarnings(chisq.test(tab_test))
-print(round(test_chi2$expected, 2))
-
-# Règle prudente : utiliser Fisher si un effectif théorique est inférieur à 5
-if (any(test_chi2$expected < 5)) {
-  test_association <- fisher.test(tab_test)
-} else {
-  test_association <- test_chi2
-}
-
-print(test_association)
-# Le test du chi2 montre une association significative entre le nombre de vaisseaux et le diagnostic.
-
-# 1. Préparer les données de Cleveland -----------------------------------
-
-variables_modele <- c(
-  "diagnostic", "age", "sexe", "type_doul_thor",
-  "pa_repos", "cholesterol", "glyc_jeun_elevee",
-  "ecg_repos", "fc_max", "angine_effort",
-  "depress_st", "pente_st", "test_thallium",
-  "nb_vaisseaux"
-)
-
-donnees_modele <- heart[
-  heart$provenance == "cleveland",
-  variables_modele
-]
-
-# Vérifier que le diagnostic a bien été transformé en 0/1.
-stopifnot(
-  all(is.na(donnees_modele$diagnostic) |
-        donnees_modele$diagnostic %in% c(0, 1))
-)
-
-# Première analyse sur cas complets :
-# les DEUX modèles doivent utiliser exactement les mêmes observations.
-# Il s'agit d'un choix provisoire, à documenter.
-n_initial <- nrow(donnees_modele)
-
-donnees_modele <- donnees_modele[
-  complete.cases(donnees_modele),
-]
-
-cat(
-  "Observations retenues :", nrow(donnees_modele),
-  "\nObservations exclues :", n_initial - nrow(donnees_modele), "\n"
-)
-
-# Ces variables sont des catégories, même si elles sont codées en nombres.
-variables_categorielles <- c(
-  "sexe", "type_doul_thor", "glyc_jeun_elevee",
-  "ecg_repos", "angine_effort", "pente_st",
-  "test_thallium", "nb_vaisseaux"
-)
-
-donnees_modele[variables_categorielles] <- lapply(
-  donnees_modele[variables_categorielles],
-  factor
-)
-
-donnees_modele$nb_vaisseaux <- relevel(
-  donnees_modele$nb_vaisseaux,
-  ref = "0"
-)
-
-
-# 2. Modèle réduit : toutes les autres variables -------------------------
-
-modele_reduit <- glm(
-  diagnostic ~ age + sexe + type_doul_thor +
-    pa_repos + cholesterol + glyc_jeun_elevee +
-    ecg_repos + fc_max + angine_effort +
-    depress_st + pente_st + test_thallium,
-  family = binomial(),
-  data = donnees_modele
-)
-
-
-# 3. Modèle complet : ajout du nombre de vaisseaux ------------------------
-
-modele_complet <- update(
-  modele_reduit,
-  . ~ . + nb_vaisseaux
-)
-
-summary(modele_complet)
-
-
-# 4. Apport global de nb_vaisseaux, ajusté sur les autres variables -------
-
-test_apport_vaisseaux <- anova(
-  modele_reduit,
-  modele_complet,
-  test = "LRT"
-)
-
-print(test_apport_vaisseaux)
-# Donc le nombre de vaisseaux visualisés apporte une information significative
-# sur le diagnostic, même après ajustement sur les autres variables.
-
-# 5. Odds ratios ajustés des catégories de nb_vaisseaux -------------------
-
-termes_vaisseaux <- grep(
-  "^nb_vaisseaux",
-  names(coef(modele_complet)),
-  value = TRUE
-)
-
-ic <- confint(modele_complet, parm = termes_vaisseaux)
-
-or_ajustes <- data.frame(
-  terme = termes_vaisseaux,
-  OR_ajuste = exp(coef(modele_complet)[termes_vaisseaux]),
-  IC95_inf = exp(ic[, 1]),
-  IC95_sup = exp(ic[, 2]),
-  row.names = NULL
-)
-
-print(or_ajustes, digits = 3)

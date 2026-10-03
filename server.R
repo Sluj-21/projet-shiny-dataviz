@@ -45,6 +45,41 @@ calcul_proportions <- function(d) {
 }
 
 function(input, output, session) {
+  output$indicateurs <- renderUI({
+    b <- import_uci$bilan_nettoyage
+    carte <- function(valeur, libelle) div(class = "metric", strong(valeur), span(libelle))
+    div(class = "metric-row",
+      carte(b$n_final, "observations après nettoyage"),
+      carte(length(import_uci$fichiers), "centres de provenance"),
+      carte(b$n_doublons_retires, "occurrences dupliquées retirées"),
+      carte(b$n_zeros_recodes, "zéros recodés en NA")
+    )
+  })
+  output$bilan_doublons <- renderText({
+    b <- import_uci$bilan_nettoyage
+    paste(b$n_doublons_retires, "occurrences retirées sur", b$n_brut,
+          "lignes initiales ;", b$n_final,
+          "observations conservées. Une ligne par paire est gardée. Les fichiers sources sont inchangés.")
+  })
+  output$journal_zeros <- DT::renderDT({
+    DT::formatRound(DT::datatable(import_uci$journal_recodage, rownames = FALSE,
+      options = list(scrollX = TRUE, dom = "t", pageLength = 8)), "pct_na_finaux", 2)
+  })
+  output$origine_na <- renderPlot({
+    d <- import_uci$na_origine
+    d$variable <- factor(d$variable, levels = rev(import_uci$colonnes))
+    ggplot(d, aes(x = pct, y = variable, fill = origine)) +
+      geom_col(width = .68) +
+      scale_fill_manual(values = c("NA initiaux" = "#B8D4FA", "Zéros recodés" = "#165DDE")) +
+      scale_x_continuous(limits = c(0, 100), labels = function(x) paste0(x, " %")) +
+      scale_y_discrete(labels = setNames(import_uci$dictionnaire$libelle,
+                                        import_uci$dictionnaire$nom_fr)) +
+      labs(x = "Pourcentage des observations après dédoublonnage", y = NULL, fill = NULL,
+           caption = "Les deux contributions s'additionnent. Dénominateur commun : toutes les observations nettoyées.") +
+      theme_minimal(base_size = 11) +
+      theme(legend.position = "top", panel.grid.major.y = element_blank(),
+            panel.grid.minor = element_blank())
+  }, res = 110)
   # Les données sources restent communes en lecture ; les sorties sont par session.
   updateSelectInput(session, "source_apercu", choices = c(
     "Toutes" = "toutes", setNames(names(import_uci$fichiers), names(import_uci$fichiers))
@@ -108,8 +143,8 @@ function(input, output, session) {
     validate(need(nrow(cleveland_analyse) > 0, "Aucune observation exploitable."))
     ggplot(resume, aes(nb_vaisseaux, proportion)) +
       geom_errorbar(aes(ymin = ic_inf, ymax = ic_sup), width = .12,
-                    colour = "#286B8F", na.rm = TRUE) +
-      geom_point(size = 3.5, colour = "#286B8F", na.rm = TRUE) +
+                    colour = "#165DDE", na.rm = TRUE) +
+      geom_point(size = 3.5, colour = "#165DDE", na.rm = TRUE) +
       scale_x_continuous(breaks = 0:3, labels = paste0(0:3, "\n(n = ", resume$n, ")")) +
       scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, .2),
                          labels = function(x) paste0(round(100*x), " %")) +
